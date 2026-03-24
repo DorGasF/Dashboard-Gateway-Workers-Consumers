@@ -99,7 +99,14 @@ builder.Services.AddSingleton<IProducer<string, string>>(serviceProvider =>
     return new ProducerBuilder<string, string>(BuildProducerConfig(kafkaOptions)).Build();
 });
 
+builder.Services.AddSingleton<IAdminClient>(serviceProvider =>
+{
+    KafkaOptions kafkaOptions = serviceProvider.GetRequiredService<IOptions<KafkaOptions>>().Value;
+    return new AdminClientBuilder(BuildAdminClientConfig(kafkaOptions)).Build();
+});
+
 builder.Services.AddSingleton<RedisService>();
+builder.Services.AddSingleton<KafkaTopicProvisionerService>();
 builder.Services.AddSingleton<TemplateRendererService>();
 builder.Services.AddSingleton<SmtpEmailSender>();
 builder.Services.AddSingleton<MailProcessingService>();
@@ -139,6 +146,20 @@ static ProducerConfig BuildProducerConfig(KafkaOptions kafkaOptions)
     ApplyKafkaSecurity(producerConfig, kafkaOptions);
 
     return producerConfig;
+}
+
+static AdminClientConfig BuildAdminClientConfig(KafkaOptions kafkaOptions)
+{
+    AdminClientConfig adminClientConfig = new()
+    {
+        BootstrapServers = kafkaOptions.BootstrapServers,
+        ClientId = kafkaOptions.AdminClientId,
+        SocketTimeoutMs = kafkaOptions.SocketTimeoutMs!.Value
+    };
+
+    ApplyKafkaSecurity(adminClientConfig, kafkaOptions);
+
+    return adminClientConfig;
 }
 
 static void ApplyKafkaSecurity(ClientConfig clientConfig, KafkaOptions kafkaOptions)

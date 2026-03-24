@@ -9,6 +9,7 @@ public sealed class Worker : BackgroundService
 {
     private readonly ILogger<Worker> _logger;
     private readonly IConsumer<string, string> _consumer;
+    private readonly KafkaTopicProvisionerService _kafkaTopicProvisionerService;
     private readonly MailProcessingService _mailProcessingService;
     private readonly string _requestTopic;
     private readonly string _groupId;
@@ -19,12 +20,14 @@ public sealed class Worker : BackgroundService
     public Worker(
         ILogger<Worker> logger,
         IConsumer<string, string> consumer,
+        KafkaTopicProvisionerService kafkaTopicProvisionerService,
         MailProcessingService mailProcessingService,
         Microsoft.Extensions.Options.IOptions<KafkaOptions> kafkaOptions,
         Microsoft.Extensions.Options.IOptions<WorkerOptions> workerOptions)
     {
         _logger = logger;
         _consumer = consumer;
+        _kafkaTopicProvisionerService = kafkaTopicProvisionerService;
         _mailProcessingService = mailProcessingService;
         _requestTopic = kafkaOptions.Value.RequestTopic;
         _groupId = kafkaOptions.Value.GroupId;
@@ -42,6 +45,7 @@ public sealed class Worker : BackgroundService
                 _requestTopic,
                 _groupId);
 
+            await _kafkaTopicProvisionerService.EnsureTopicsAvailableAsync(stoppingToken);
             _consumer.Subscribe(_requestTopic);
 
             while (!stoppingToken.IsCancellationRequested)
@@ -71,6 +75,17 @@ public sealed class Worker : BackgroundService
                 }
                 catch (ConsumeException ex)
                 {
+                    if (ex.Error.Code == ErrorCode.UnknownTopicOrPart)
+                    {
+                        _logger.LogWarning(
+                            ex,
+                            "O tópico Kafka {Topic} ainda não está disponível. O worker aguardará a criação/propagação do tópico.",
+                            _requestTopic);
+
+                        await _kafkaTopicProvisionerService.EnsureTopicsAvailableAsync(stoppingToken);
+                        continue;
+                    }
+
                     _logger.LogError(ex, "Erro ao consumir mensagem do Kafka");
                     await Task.Delay(_retryDelayMs, stoppingToken);
                 }
