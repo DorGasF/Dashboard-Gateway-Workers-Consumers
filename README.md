@@ -11,6 +11,7 @@ Os workers desta pasta são responsáveis por processamentos como:
 - consumo de eventos
 - leitura de filas
 - persistência assíncrona
+- centralização de logs
 - integração com Redis
 - integração com Kafka
 - envio de e-mails
@@ -45,18 +46,20 @@ Cada worker deve seguir, preferencialmente, a mesma organização base:
 
 ### `WorkerLogs`
 
-Responsável por consumir logs armazenados no Redis e persisti-los em disco.
+Responsável por consumir logs centralizados no Kafka e persisti-los em disco.
 
 Função principal:
 
-- ler a lista `application:logs` no Redis
+- escutar o tópico `application.logs` no Kafka
 - processar lotes de logs
 - gravar arquivos de log em disco
+- transformar logs estruturados em linhas legíveis para auditoria operacional
 
 Uso no ecossistema:
 
-- desacopla a gravação de logs da aplicação principal
-- reduz custo de I/O na API
+- centraliza erros e eventos operacionais em um único fluxo
+- desacopla a gravação de logs da aplicação principal e dos workers
+- reduz custo de I/O direto nos processos produtores
 - permite processamento em lote
 
 ### `WorkerMail`
@@ -66,6 +69,7 @@ Responsável por consumir pedidos de envio de e-mail, processar o evento e reali
 Função principal:
 
 - escutar eventos no Kafka
+- publicar erros operacionais no `Core.Log`
 - validar o payload recebido
 - garantir idempotência com Redis
 - controlar concorrência entre múltiplos workers
@@ -87,6 +91,7 @@ Uso no ecossistema:
 - integrações externas devem ser encapsuladas em `Services`
 - configurações não devem ficar hardcoded no código quando forem operacionais
 - contratos de eventos devem ficar claros e rastreáveis
+- logs importantes devem ser publicados no fluxo central de `Core.Log`
 - processamento concorrente deve considerar idempotência e condição de corrida
 
 ## Fluxo Esperado

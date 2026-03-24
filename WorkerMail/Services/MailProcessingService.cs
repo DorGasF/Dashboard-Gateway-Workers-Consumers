@@ -66,6 +66,11 @@ public sealed class MailProcessingService
         }
         catch (JsonException ex)
         {
+            await Core.Log.EnqueueErrorAsync(
+                "Payload inválido recebido pelo WorkerMail.",
+                ex,
+                BuildLogMetadata(consumeResult, null, null, 0, "payload_invalido"));
+
             await PublishDeadLetterAsync(
                 rawMessage,
                 mailEvent: null,
@@ -80,6 +85,11 @@ public sealed class MailProcessingService
 
         if (!TryValidateEvent(mailEvent, out string validationError))
         {
+            await Core.Log.EnqueueErrorAsync(
+                "Evento inválido recebido pelo WorkerMail.",
+                null,
+                BuildLogMetadata(consumeResult, mailEvent, null, 0, "evento_invalido", validationError));
+
             await PublishDeadLetterAsync(
                 rawMessage,
                 mailEvent,
@@ -107,6 +117,11 @@ public sealed class MailProcessingService
 
         if (!lockAcquired)
         {
+            await Core.Log.EnqueueWarningAsync(
+                "Outro worker já está processando o mesmo evento de e-mail.",
+                null,
+                BuildLogMetadata(consumeResult, mailEvent, idempotencyKey, attempt: 0, "lock_em_uso"));
+
             return MailProcessingResult.Retry("Outro worker está processando esse mesmo evento.");
         }
 
@@ -156,6 +171,11 @@ public sealed class MailProcessingService
         }
         catch (InvalidOperationException ex)
         {
+            await Core.Log.EnqueueErrorAsync(
+                "Falha permanente de template no WorkerMail.",
+                ex,
+                BuildLogMetadata(consumeResult, mailEvent, idempotencyKey, attempt, "template_invalido"));
+
             await PublishDeadLetterAsync(
                 rawMessage,
                 mailEvent,
@@ -171,6 +191,11 @@ public sealed class MailProcessingService
         }
         catch (SmtpException ex) when (attempt >= _maxProcessingAttempts)
         {
+            await Core.Log.EnqueueErrorAsync(
+                "Falha SMTP após atingir o limite de tentativas no WorkerMail.",
+                ex,
+                BuildLogMetadata(consumeResult, mailEvent, idempotencyKey, attempt, "smtp_falhou_limite"));
+
             await PublishDeadLetterAsync(
                 rawMessage,
                 mailEvent,
@@ -186,6 +211,11 @@ public sealed class MailProcessingService
         }
         catch (SmtpException ex)
         {
+            await Core.Log.EnqueueWarningAsync(
+                "Falha SMTP temporária no WorkerMail.",
+                ex,
+                BuildLogMetadata(consumeResult, mailEvent, idempotencyKey, attempt, "smtp_temporario"));
+
             _logger.LogWarning(
                 ex,
                 "Falha SMTP temporária ao enviar evento {EventId}. Tentativa {Attempt} de {MaxAttempts}",
@@ -197,6 +227,11 @@ public sealed class MailProcessingService
         }
         catch (Exception ex) when (attempt >= _maxProcessingAttempts)
         {
+            await Core.Log.EnqueueErrorAsync(
+                "Falha de processamento após atingir o limite de tentativas no WorkerMail.",
+                ex,
+                BuildLogMetadata(consumeResult, mailEvent, idempotencyKey, attempt, "processamento_falhou_limite"));
+
             await PublishDeadLetterAsync(
                 rawMessage,
                 mailEvent,
@@ -212,6 +247,11 @@ public sealed class MailProcessingService
         }
         catch (Exception ex)
         {
+            await Core.Log.EnqueueWarningAsync(
+                "Falha temporária durante o processamento do WorkerMail.",
+                ex,
+                BuildLogMetadata(consumeResult, mailEvent, idempotencyKey, attempt, "falha_temporaria"));
+
             _logger.LogWarning(
                 ex,
                 "Falha temporária ao processar evento {EventId}. Tentativa {Attempt} de {MaxAttempts}",
@@ -343,5 +383,44 @@ public sealed class MailProcessingService
     {
         return addresses
             .Split([';', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    }
+
+    private static IReadOnlyDictionary<string, string> BuildLogMetadata(
+        ConsumeResult<string, string> consumeResult,
+        MailEvent? mailEvent,
+        string? idempotencyKey,
+        int attempt,
+        string reason,
+        string? detail = null)
+    {
+        Dictionary<string, string> metadata = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["worker"] = "WorkerMail",
+            ["reason"] = reason,
+            ["topic"] = consumeResult.Topic,
+            ["partition"] = consumeResult.Partition.Value.ToString(),
+            ["offset"] = consumeResult.Offset.Value.ToString(),
+            ["attempt"] = attempt.ToString()
+        };
+
+        if (!string.IsNullOrWhiteSpace(idempotencyKey))
+        {
+            metadata["idempotencyKey"] = idempotencyKey;
+        }
+
+        if (!string.IsNullOrWhiteSpace(detail))
+        {
+            metadata["detail"] = detail;
+        }
+
+        if (mailEvent is not null)
+        {
+            metadata["eventId"] = mailEvent.EventId.ToString();
+            metadata["eventType"] = mailEvent.EventType;
+            metadata["template"] = mailEvent.Template;
+            metadata["to"] = mailEvent.To;
+        }
+
+        return metadata;
     }
 }

@@ -49,6 +49,12 @@ builder.Services
     .Validate(ValidateOptions, "Configuração inválida de log de console.")
     .ValidateOnStart();
 
+builder.Services
+    .AddOptions<CoreLogOptions>()
+    .Bind(builder.Configuration.GetSection(CoreLogOptions.SectionName))
+    .Validate(ValidateOptions, "Configuração inválida do CoreLog.")
+    .ValidateOnStart();
+
 ConsoleLoggingOptions consoleLoggingOptions = builder.Configuration
     .GetSection(ConsoleLoggingOptions.SectionName)
     .Get<ConsoleLoggingOptions>() ?? throw new InvalidOperationException("Seção ConsoleLogging não encontrada.");
@@ -107,12 +113,17 @@ builder.Services.AddSingleton<IAdminClient>(serviceProvider =>
 
 builder.Services.AddSingleton<RedisService>();
 builder.Services.AddSingleton<KafkaTopicProvisionerService>();
+builder.Services.AddSingleton<LogQueue>();
 builder.Services.AddSingleton<TemplateRendererService>();
 builder.Services.AddSingleton<SmtpEmailSender>();
 builder.Services.AddSingleton<MailProcessingService>();
 builder.Services.AddHostedService<Worker>();
 
-await builder.Build().RunAsync();
+IHost host = builder.Build();
+LogQueue coreLogQueue = host.Services.GetRequiredService<LogQueue>();
+Core.Initialize(coreLogQueue);
+await coreLogQueue.EnsureTopicAsync();
+await host.RunAsync();
 
 static ConsumerConfig BuildConsumerConfig(KafkaOptions kafkaOptions)
 {

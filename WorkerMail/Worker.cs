@@ -77,6 +77,17 @@ public sealed class Worker : BackgroundService
                 {
                     if (ex.Error.Code == ErrorCode.UnknownTopicOrPart)
                     {
+                        await Core.Log.EnqueueWarningAsync(
+                            "Tópico Kafka ainda não disponível para o WorkerMail.",
+                            ex,
+                            new Dictionary<string, string>
+                            {
+                                ["worker"] = "WorkerMail",
+                                ["groupId"] = _groupId,
+                                ["topic"] = _requestTopic,
+                                ["reason"] = "unknown_topic_or_partition"
+                            });
+
                         _logger.LogWarning(
                             ex,
                             "O tópico Kafka {Topic} ainda não está disponível. O worker aguardará a criação/propagação do tópico.",
@@ -85,6 +96,16 @@ public sealed class Worker : BackgroundService
                         await _kafkaTopicProvisionerService.EnsureTopicsAvailableAsync(stoppingToken);
                         continue;
                     }
+
+                    await Core.Log.EnqueueErrorAsync(
+                        "Erro ao consumir mensagem do Kafka no WorkerMail.",
+                        ex,
+                        new Dictionary<string, string>
+                        {
+                            ["worker"] = "WorkerMail",
+                            ["groupId"] = _groupId,
+                            ["topic"] = _requestTopic
+                        });
 
                     _logger.LogError(ex, "Erro ao consumir mensagem do Kafka");
                     await Task.Delay(_retryDelayMs, stoppingToken);
@@ -95,6 +116,24 @@ public sealed class Worker : BackgroundService
                 }
                 catch (Exception ex)
                 {
+                    Dictionary<string, string> metadata = new()
+                    {
+                        ["worker"] = "WorkerMail",
+                        ["groupId"] = _groupId,
+                        ["topic"] = _requestTopic
+                    };
+
+                    if (consumeResult is not null)
+                    {
+                        metadata["partition"] = consumeResult.Partition.Value.ToString();
+                        metadata["offset"] = consumeResult.Offset.Value.ToString();
+                    }
+
+                    await Core.Log.EnqueueErrorAsync(
+                        "Erro inesperado no loop principal do WorkerMail.",
+                        ex,
+                        metadata);
+
                     _logger.LogError(ex, "Erro inesperado no WorkerMail");
 
                     if (consumeResult is not null)

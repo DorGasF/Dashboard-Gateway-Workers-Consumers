@@ -49,6 +49,16 @@ public sealed class KafkaTopicProvisionerService
             }
             catch (KafkaException ex)
             {
+                await Core.Log.EnqueueWarningAsync(
+                    "Kafka indisponível ao validar ou criar tópicos do WorkerMail.",
+                    ex,
+                    new Dictionary<string, string>
+                    {
+                        ["worker"] = "WorkerMail",
+                        ["requestTopic"] = _kafkaOptions.RequestTopic,
+                        ["deadLetterTopic"] = _kafkaOptions.DeadLetterTopic
+                    });
+
                 _logger.LogWarning(
                     ex,
                     "Kafka indisponível ao validar/criar tópicos. Nova tentativa em {DelayMs} ms.",
@@ -56,6 +66,16 @@ public sealed class KafkaTopicProvisionerService
             }
             catch (Exception ex)
             {
+                await Core.Log.EnqueueErrorAsync(
+                    "Erro inesperado ao validar ou criar tópicos Kafka do WorkerMail.",
+                    ex,
+                    new Dictionary<string, string>
+                    {
+                        ["worker"] = "WorkerMail",
+                        ["requestTopic"] = _kafkaOptions.RequestTopic,
+                        ["deadLetterTopic"] = _kafkaOptions.DeadLetterTopic
+                    });
+
                 _logger.LogWarning(
                     ex,
                     "Erro inesperado ao validar/criar tópicos Kafka. Nova tentativa em {DelayMs} ms.",
