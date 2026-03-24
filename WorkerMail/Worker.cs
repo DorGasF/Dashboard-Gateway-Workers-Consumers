@@ -18,6 +18,7 @@ public sealed class Worker : BackgroundService
     private readonly int _idleDelayMs;
     private readonly int _retryDelayMs;
     private readonly int _shutdownDrainTimeoutSeconds;
+    private readonly int _statusLogIntervalSeconds;
     private readonly SemaphoreSlim _processingSemaphore;
     private readonly object _inFlightTasksLock = new();
     private readonly HashSet<Task> _inFlightTasks = [];
@@ -45,6 +46,7 @@ public sealed class Worker : BackgroundService
         _idleDelayMs = workerOptions.Value.IdleDelayMs!.Value;
         _retryDelayMs = workerOptions.Value.RetryDelayMs!.Value;
         _shutdownDrainTimeoutSeconds = workerOptions.Value.ShutdownDrainTimeoutSeconds!.Value;
+        _statusLogIntervalSeconds = workerOptions.Value.StatusLogIntervalSeconds!.Value;
         _processingSemaphore = new SemaphoreSlim(workerOptions.Value.MaxConcurrentMessages!.Value, workerOptions.Value.MaxConcurrentMessages!.Value);
     }
 
@@ -60,9 +62,16 @@ public sealed class Worker : BackgroundService
 
             await _kafkaTopicProvisionerService.EnsureTopicsAvailableAsync(stoppingToken);
             _consumer.Subscribe(_requestTopic);
+            DateTimeOffset nextStatusLogAt = DateTimeOffset.UtcNow.AddSeconds(_statusLogIntervalSeconds);
 
             while (!stoppingToken.IsCancellationRequested)
             {
+                if (DateTimeOffset.UtcNow >= nextStatusLogAt)
+                {
+                    LogWorkerStatus();
+                    nextStatusLogAt = DateTimeOffset.UtcNow.AddSeconds(_statusLogIntervalSeconds);
+                }
+
                 CommitPendingOffsets();
 
                 if (_processingSemaphore.CurrentCount == 0)
@@ -376,6 +385,25 @@ public sealed class Worker : BackgroundService
                 "Timeout ao aguardar drenagem das tarefas em andamento do WorkerMail. Tarefas restantes: {Count}",
                 tasks.Length);
         }
+    }
+
+    private int GetInFlightTaskCount()
+    {
+        lock (_inFlightTasksLock)
+        {
+            return _inFlightTasks.Count;
+        }
+    }
+
+    private void LogWorkerStatus()
+    {
+        _logger.LogInformation(
+            "WorkerMail operacional. InFlight={InFlight}. SlotsLivres={AvailableSlots}. PendingCommits={PendingCommits}. Topic={Topic}. GroupId={GroupId}",
+            GetInFlightTaskCount(),
+            _processingSemaphore.CurrentCount,
+            _pendingCommits.Count,
+            _requestTopic,
+            _groupId);
     }
 
     private sealed class PartitionCommitState

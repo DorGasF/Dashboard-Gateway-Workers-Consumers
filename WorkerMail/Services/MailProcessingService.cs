@@ -108,7 +108,7 @@ public sealed class MailProcessingService
                 resolvedMailDefinition.SenderProfile,
                 cancellationToken);
 
-            _logger.LogDebug(
+            _logger.LogInformation(
                 "Evento {EventId} processado com sucesso para {To}. Tentativa {Attempt}. Partition={Partition} Offset={Offset}. MessageId={MessageId}",
                 mailEvent.EventId,
                 mailEvent.To,

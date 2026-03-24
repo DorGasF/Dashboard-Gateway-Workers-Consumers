@@ -27,6 +27,10 @@ public sealed class WorkerOptions
     public int? ShutdownDrainTimeoutSeconds { get; set; }
 
     [Required]
+    [Range(1, 3600)]
+    public int? StatusLogIntervalSeconds { get; set; }
+
+    [Required]
     [Range(1, 100)]
     public int? MaxProcessingAttempts { get; set; }
 }
