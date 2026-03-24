@@ -18,7 +18,7 @@ public sealed class Worker : BackgroundService
     private readonly int _flushIntervalMs;
     private readonly int _retryDelayMs;
     private readonly string _logsDirectory;
-    private readonly List<string> _buffer = [];
+    private readonly List<BufferedLogItem> _buffer = [];
     private readonly object _lock = new();
     private static int _isFlushing;
 
@@ -62,17 +62,16 @@ public sealed class Worker : BackgroundService
 
                     if (consumeResult is null)
                     {
-                        _ = Task.Run(FlushToDiskAsync, stoppingToken);
+                        await FlushToDiskAndCommitAsync();
                         await Task.Delay(_flushIntervalMs, stoppingToken);
                         continue;
                     }
 
-                    ProcessLogEntry(consumeResult.Message.Value);
-                    _consumer.Commit(consumeResult);
+                    BufferLogEntry(consumeResult);
 
-                    if (_buffer.Count >= _batchSize)
+                    if (GetBufferedCount() >= _batchSize)
                     {
-                        _ = Task.Run(FlushToDiskAsync, stoppingToken);
+                        await FlushToDiskAndCommitAsync();
                     }
                 }
                 catch (ConsumeException ex) when (ex.Error.Code == ErrorCode.UnknownTopicOrPart)
@@ -102,17 +101,28 @@ public sealed class Worker : BackgroundService
         }
         finally
         {
-            await FlushToDiskAsync();
+            await FlushToDiskAndCommitAsync();
             _consumer.Close();
             _consumer.Dispose();
         }
     }
 
-    private void ProcessLogEntry(string? rawMessage)
+    private void BufferLogEntry(ConsumeResult<string, string> consumeResult)
+    {
+        string line = BuildLogLine(consumeResult.Message.Value);
+        BufferedLogItem item = new(consumeResult.TopicPartition, consumeResult.Offset, line);
+
+        lock (_lock)
+        {
+            _buffer.Add(item);
+        }
+    }
+
+    private string BuildLogLine(string? rawMessage)
     {
         if (string.IsNullOrWhiteSpace(rawMessage))
         {
-            return;
+            return $"[{DateTimeOffset.UtcNow:O}] [Warning] [WorkerLogs] Payload de log vazio recebido.";
         }
 
         try
@@ -120,34 +130,33 @@ public sealed class Worker : BackgroundService
             CoreLogEntry? logEntry = JsonSerializer.Deserialize<CoreLogEntry>(rawMessage, JsonOptions);
             if (logEntry is null)
             {
-                return;
+                return $"[{DateTimeOffset.UtcNow:O}] [Warning] [WorkerLogs] Payload de log nulo recebido.";
             }
 
-            string line = FormatLogLine(logEntry);
-
-            lock (_lock)
-            {
-                _buffer.Add(line);
-            }
+            return FormatLogLine(logEntry);
         }
         catch
         {
-            string fallbackLine = $"[{DateTimeOffset.UtcNow:O}] [Warning] [WorkerLogs] Payload de log inválido: {rawMessage}";
-            lock (_lock)
-            {
-                _buffer.Add(fallbackLine);
-            }
+            return $"[{DateTimeOffset.UtcNow:O}] [Warning] [WorkerLogs] Payload de log inválido: {rawMessage}";
         }
     }
 
-    private async Task FlushToDiskAsync()
+    private int GetBufferedCount()
+    {
+        lock (_lock)
+        {
+            return _buffer.Count;
+        }
+    }
+
+    private async Task FlushToDiskAndCommitAsync()
     {
         if (Interlocked.Exchange(ref _isFlushing, 1) == 1)
         {
             return;
         }
 
-        List<string> lines;
+        List<BufferedLogItem> items;
         lock (_lock)
         {
             if (_buffer.Count == 0)
@@ -156,18 +165,30 @@ public sealed class Worker : BackgroundService
                 return;
             }
 
-            lines = [.. _buffer];
+            items = [.. _buffer];
             _buffer.Clear();
         }
 
         try
         {
             string filePath = Path.Combine(_logsDirectory, $"{DateTime.UtcNow:yyyy-MM-dd}.log");
-            await File.AppendAllLinesAsync(filePath, lines, Encoding.UTF8);
+            await File.AppendAllLinesAsync(filePath, items.Select(item => item.Line), Encoding.UTF8);
+
+            List<TopicPartitionOffset> offsetsToCommit = items
+                .GroupBy(item => item.TopicPartition)
+                .Select(group => new TopicPartitionOffset(group.Key, new Offset(group.Max(item => item.Offset.Value) + 1)))
+                .ToList();
+
+            _consumer.Commit(offsetsToCommit);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Erro ao gravar logs em disco");
+            lock (_lock)
+            {
+                _buffer.InsertRange(0, items);
+            }
+
+            _logger.LogError(ex, "Erro ao gravar logs em disco ou confirmar offsets no Kafka");
         }
         finally
         {
@@ -193,4 +214,6 @@ public sealed class Worker : BackgroundService
 
         return $"[{entry.Timestamp:O}] [{entry.Level}] [{source}/{entry.SourceType}]{location} {entry.Message}{metadata}{exception}";
     }
+
+    private sealed record BufferedLogItem(TopicPartition TopicPartition, Offset Offset, string Line);
 }

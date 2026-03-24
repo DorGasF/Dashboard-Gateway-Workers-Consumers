@@ -122,7 +122,6 @@ builder.Services.AddHostedService<Worker>();
 IHost host = builder.Build();
 LogQueue coreLogQueue = host.Services.GetRequiredService<LogQueue>();
 Core.Initialize(coreLogQueue);
-await coreLogQueue.EnsureTopicAsync();
 await host.RunAsync();
 
 static ConsumerConfig BuildConsumerConfig(KafkaOptions kafkaOptions)

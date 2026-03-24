@@ -1,5 +1,4 @@
 using Confluent.Kafka;
-using Confluent.Kafka.Admin;
 using System.ComponentModel.DataAnnotations;
 using WorkerLogs;
 using WorkerLogs.Options;
