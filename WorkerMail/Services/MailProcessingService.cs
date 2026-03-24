@@ -18,23 +18,15 @@ public sealed class MailProcessingService
     };
 
     private readonly ILogger<MailProcessingService> _logger;
-    private readonly RedisService _redisService;
     private readonly MailDefinitionResolverService _mailDefinitionResolverService;
     private readonly TemplateRendererService _templateRendererService;
     private readonly SmtpEmailSender _smtpEmailSender;
     private readonly IProducer<string, string> _producer;
     private readonly KafkaOptions _kafkaOptions;
-    private readonly string _instanceId = $"{Environment.MachineName}-{Environment.ProcessId}";
-    private readonly int _lockTimeoutSeconds;
-    private readonly int _attemptKeyTtlHours;
-    private readonly int _processedKeyTtlHours;
     private readonly int _maxProcessingAttempts;
-    private readonly bool _cacheLastEvent;
-    private readonly int _lastEventCacheTtlMinutes;
 
     public MailProcessingService(
         ILogger<MailProcessingService> logger,
-        RedisService redisService,
         MailDefinitionResolverService mailDefinitionResolverService,
         TemplateRendererService templateRendererService,
         SmtpEmailSender smtpEmailSender,
@@ -43,21 +35,15 @@ public sealed class MailProcessingService
         IOptions<WorkerOptions> workerOptions)
     {
         _logger = logger;
-        _redisService = redisService;
         _mailDefinitionResolverService = mailDefinitionResolverService;
         _templateRendererService = templateRendererService;
         _smtpEmailSender = smtpEmailSender;
         _producer = producer;
         _kafkaOptions = kafkaOptions.Value;
-        _lockTimeoutSeconds = workerOptions.Value.LockTimeoutSeconds!.Value;
-        _attemptKeyTtlHours = workerOptions.Value.AttemptKeyTtlHours!.Value;
-        _processedKeyTtlHours = workerOptions.Value.ProcessedKeyTtlHours!.Value;
         _maxProcessingAttempts = workerOptions.Value.MaxProcessingAttempts!.Value;
-        _cacheLastEvent = workerOptions.Value.CacheLastEvent!.Value;
-        _lastEventCacheTtlMinutes = workerOptions.Value.LastEventCacheTtlMinutes!.Value;
     }
 
-    public async Task<MailProcessingResult> ProcessAsync(ConsumeResult<string, string> consumeResult, CancellationToken cancellationToken)
+    public async Task<MailProcessingResult> ProcessAsync(ConsumeResult<string, string> consumeResult, int attempt, CancellationToken cancellationToken)
     {
         string rawMessage = consumeResult.Message.Value ?? string.Empty;
         MailEvent? mailEvent;
@@ -105,41 +91,9 @@ public sealed class MailProcessingService
         }
 
         string idempotencyKey = mailEvent!.ResolveIdempotencyKey();
-        if (await _redisService.IsProcessedAsync(idempotencyKey))
-        {
-            _logger.LogInformation("Evento {EventId} já foi processado anteriormente. Commitando sem reenviar.", mailEvent.EventId);
-            return MailProcessingResult.Commit("Evento já processado.");
-        }
-
-        string lockOwner = $"{_instanceId}:{consumeResult.Partition.Value}:{consumeResult.Offset.Value}";
-        bool lockAcquired = await _redisService.TryAcquireProcessingLockAsync(
-            idempotencyKey,
-            lockOwner,
-            TimeSpan.FromSeconds(_lockTimeoutSeconds));
-
-        if (!lockAcquired)
-        {
-            await Core.Log.EnqueueWarningAsync(
-                "Outro worker já está processando o mesmo evento de e-mail.",
-                null,
-                BuildLogMetadata(consumeResult, mailEvent, idempotencyKey, attempt: 0, "lock_em_uso"));
-
-            return MailProcessingResult.Retry("Outro worker está processando esse mesmo evento.");
-        }
-
-        int attempt = 0;
 
         try
         {
-            if (await _redisService.IsProcessedAsync(idempotencyKey))
-            {
-                return MailProcessingResult.Commit("Evento já processado após aquisição do lock.");
-            }
-
-            attempt = await _redisService.IncrementAttemptAsync(
-                idempotencyKey,
-                TimeSpan.FromHours(_attemptKeyTtlHours));
-
             ResolvedMailDefinition resolvedMailDefinition = _mailDefinitionResolverService.Resolve(mailEvent);
 
             RenderedMail renderedMail = await _templateRendererService.RenderAsync(
@@ -154,34 +108,14 @@ public sealed class MailProcessingService
                 resolvedMailDefinition.SenderProfile,
                 cancellationToken);
 
-            await _redisService.MarkAsProcessedAsync(
-                idempotencyKey,
-                new
-                {
-                    mailEvent.EventId,
-                    mailEvent.EventType,
-                    MailType = resolvedMailDefinition.MailType,
-                    Template = resolvedMailDefinition.Template,
-                    SenderProfile = resolvedMailDefinition.SenderProfileName,
-                    mailEvent.To,
-                    MessageId = messageId,
-                    ProcessedAt = DateTimeOffset.UtcNow,
-                    Attempt = attempt
-                },
-                TimeSpan.FromHours(_processedKeyTtlHours));
-
-            await _redisService.ClearAttemptAsync(idempotencyKey);
-
-            if (_cacheLastEvent)
-            {
-                await _redisService.CacheLastEventAsync(mailEvent, TimeSpan.FromMinutes(_lastEventCacheTtlMinutes));
-            }
-
-            _logger.LogInformation(
-                "Evento {EventId} processado com sucesso para {To}. Tentativa {Attempt}",
+            _logger.LogDebug(
+                "Evento {EventId} processado com sucesso para {To}. Tentativa {Attempt}. Partition={Partition} Offset={Offset}. MessageId={MessageId}",
                 mailEvent.EventId,
                 mailEvent.To,
-                attempt);
+                attempt,
+                consumeResult.Partition.Value,
+                consumeResult.Offset.Value,
+                messageId);
 
             return MailProcessingResult.Commit("E-mail enviado com sucesso.");
         }
@@ -201,8 +135,6 @@ public sealed class MailProcessingService
                 attempt,
                 cancellationToken);
 
-            await _redisService.ClearAttemptAsync(idempotencyKey);
-
             return MailProcessingResult.Commit("Falha permanente de template enviada para a DLQ.");
         }
         catch (SmtpException ex) when (attempt >= _maxProcessingAttempts)
@@ -220,8 +152,6 @@ public sealed class MailProcessingService
                 ex.Message,
                 attempt,
                 cancellationToken);
-
-            await _redisService.ClearAttemptAsync(idempotencyKey);
 
             return MailProcessingResult.Commit("Falha SMTP enviada para a DLQ após atingir o limite.");
         }
@@ -257,8 +187,6 @@ public sealed class MailProcessingService
                 attempt,
                 cancellationToken);
 
-            await _redisService.ClearAttemptAsync(idempotencyKey);
-
             return MailProcessingResult.Commit("Falha de processamento enviada para a DLQ após atingir o limite.");
         }
         catch (Exception ex)
@@ -276,10 +204,6 @@ public sealed class MailProcessingService
                 _maxProcessingAttempts);
 
             return MailProcessingResult.Retry("Falha temporária durante o processamento.");
-        }
-        finally
-        {
-            await _redisService.ReleaseProcessingLockAsync(idempotencyKey, lockOwner);
         }
     }
 

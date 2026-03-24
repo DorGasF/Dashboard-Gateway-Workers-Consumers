@@ -27,25 +27,6 @@ public sealed class WorkerOptions
     public int? ShutdownDrainTimeoutSeconds { get; set; }
 
     [Required]
-    [Range(5, 3600)]
-    public int? LockTimeoutSeconds { get; set; }
-
-    [Required]
     [Range(1, 100)]
     public int? MaxProcessingAttempts { get; set; }
-
-    [Required]
-    [Range(1, 720)]
-    public int? AttemptKeyTtlHours { get; set; }
-
-    [Required]
-    [Range(1, 8760)]
-    public int? ProcessedKeyTtlHours { get; set; }
-
-    [Required]
-    [Range(1, 1440)]
-    public int? LastEventCacheTtlMinutes { get; set; }
-
-    [Required]
-    public bool? CacheLastEvent { get; set; }
 }

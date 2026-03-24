@@ -80,8 +80,8 @@ public sealed class Worker : BackgroundService
                         await Task.Delay(_idleDelayMs, stoppingToken);
                         continue;
                     }
-
                     await _processingSemaphore.WaitAsync(stoppingToken);
+
                     DispatchMessage(consumeResult, stoppingToken);
                 }
                 catch (ConsumeException ex)
@@ -183,13 +183,16 @@ public sealed class Worker : BackgroundService
     {
         try
         {
+            int attempt = 0;
+
             while (!linkedCts.IsCancellationRequested)
             {
                 MailProcessingResult processingResult;
+                attempt++;
 
                 try
                 {
-                    processingResult = await _mailProcessingService.ProcessAsync(consumeResult, linkedCts.Token);
+                    processingResult = await _mailProcessingService.ProcessAsync(consumeResult, attempt, linkedCts.Token);
                 }
                 catch (OperationCanceledException) when (linkedCts.IsCancellationRequested)
                 {
@@ -217,6 +220,15 @@ public sealed class Worker : BackgroundService
                     MarkOffsetAsCompleted(consumeResult.TopicPartition, consumeResult.Offset.Value, generation);
                     return;
                 }
+
+                _logger.LogInformation(
+                    "Processamento solicitou retry. Partition={Partition} Offset={Offset} Generation={Generation} Attempt={Attempt} RetryDelayMs={RetryDelayMs} Reason={Reason}",
+                    consumeResult.Partition.Value,
+                    consumeResult.Offset.Value,
+                    generation,
+                    attempt,
+                    _retryDelayMs,
+                    processingResult.Reason);
 
                 await Task.Delay(_retryDelayMs, linkedCts.Token);
             }
@@ -353,6 +365,7 @@ public sealed class Worker : BackgroundService
             return;
         }
 
+        _logger.LogInformation("Iniciando drenagem das tarefas em andamento. Quantidade={Count}", tasks.Length);
         Task allTasks = Task.WhenAll(tasks);
         Task timeoutTask = Task.Delay(TimeSpan.FromSeconds(_shutdownDrainTimeoutSeconds));
         Task completedTask = await Task.WhenAny(allTasks, timeoutTask);

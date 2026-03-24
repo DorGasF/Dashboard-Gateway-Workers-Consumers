@@ -1,6 +1,5 @@
 using Confluent.Kafka;
 using Microsoft.Extensions.Options;
-using StackExchange.Redis;
 using System.ComponentModel.DataAnnotations;
 using WorkerMail;
 using WorkerMail.Options;
@@ -12,12 +11,6 @@ builder.Configuration.Sources.Clear();
 builder.Configuration
     .SetBasePath(AppContext.BaseDirectory)
     .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true);
-
-builder.Services
-    .AddOptions<RedisOptions>()
-    .Bind(builder.Configuration.GetSection(RedisOptions.SectionName))
-    .Validate(ValidateOptions, "Configuração inválida de Redis.")
-    .ValidateOnStart();
 
 builder.Services
     .AddOptions<KafkaOptions>()
@@ -72,33 +65,6 @@ builder.Logging.AddSimpleConsole(options =>
     options.SingleLine = consoleLoggingOptions.SingleLine!.Value;
 });
 
-builder.Services.AddSingleton<IConnectionMultiplexer>(serviceProvider =>
-{
-    RedisOptions redisOptions = serviceProvider.GetRequiredService<IOptions<RedisOptions>>().Value;
-
-    ConfigurationOptions options = new()
-    {
-        AbortOnConnectFail = redisOptions.AbortOnConnectFail!.Value,
-        ReconnectRetryPolicy = new ExponentialRetry(redisOptions.ReconnectRetryDelayMs!.Value),
-        ConnectRetry = redisOptions.ConnectRetry!.Value,
-        ConnectTimeout = redisOptions.ConnectTimeoutMs!.Value,
-        KeepAlive = redisOptions.KeepAliveSeconds!.Value,
-        AsyncTimeout = redisOptions.AsyncTimeoutMs!.Value,
-        AllowAdmin = redisOptions.AllowAdmin!.Value,
-        ClientName = redisOptions.ClientName,
-        DefaultDatabase = redisOptions.Database!.Value
-    };
-
-    options.EndPoints.Add(redisOptions.Host, redisOptions.Port!.Value);
-
-    if (!string.IsNullOrWhiteSpace(redisOptions.Password))
-    {
-        options.Password = redisOptions.Password;
-    }
-
-    return ConnectionMultiplexer.Connect(options);
-});
-
 builder.Services.AddSingleton<IConsumer<string, string>>(serviceProvider =>
 {
     KafkaOptions kafkaOptions = serviceProvider.GetRequiredService<IOptions<KafkaOptions>>().Value;
@@ -130,7 +96,6 @@ builder.Services.AddSingleton<IAdminClient>(serviceProvider =>
     return new AdminClientBuilder(BuildAdminClientConfig(kafkaOptions)).Build();
 });
 
-builder.Services.AddSingleton<RedisService>();
 builder.Services.AddSingleton<WorkerRuntimeContext>();
 builder.Services.AddSingleton<KafkaPartitionTrackerService>();
 builder.Services.AddSingleton<KafkaTopicProvisionerService>();

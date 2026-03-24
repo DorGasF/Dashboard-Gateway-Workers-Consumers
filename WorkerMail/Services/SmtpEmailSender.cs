@@ -1,5 +1,4 @@
 using Microsoft.Extensions.Options;
-using System.Net;
 using System.Net.Mail;
 using System.Text;
 using WorkerMail.Models;
@@ -59,13 +58,6 @@ public sealed class SmtpEmailSender
         if (_smtpOptions.DevelopmentMode!.Value)
         {
             connectionLease.MarkMessageSent();
-            _logger.LogInformation(
-                "Envio SMTP simulado com sucesso para {To}. MailType: {MailType}. Sender={From}. MessageId: {MessageId}",
-                mailEvent.To,
-                mailEvent.MailType ?? "legacy.template",
-                senderProfile.FromEmail,
-                messageId);
-
             return messageId;
         }
 
@@ -80,7 +72,7 @@ public sealed class SmtpEmailSender
             throw;
         }
 
-        _logger.LogInformation("E-mail enviado com sucesso para {To}", mailEvent.To);
+        _logger.LogDebug("E-mail enviado com sucesso para {To}. MessageId={MessageId}", mailEvent.To, messageId);
         return messageId;
     }
 
