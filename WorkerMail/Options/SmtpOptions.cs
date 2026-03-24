@@ -20,6 +20,9 @@ public sealed class SmtpOptions
     public bool? EnableSsl { get; set; }
 
     [Required]
+    public bool? DevelopmentMode { get; set; }
+
+    [Required]
     public bool? UseDefaultCredentials { get; set; }
 
     [Required]

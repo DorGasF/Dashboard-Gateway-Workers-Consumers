@@ -49,6 +49,17 @@ public sealed class SmtpEmailSender
         message.Headers.Add("X-Raims-Idempotency-Key", mailEvent.ResolveIdempotencyKey());
         message.Headers.Add("Message-ID", messageId);
 
+        if (_smtpOptions.DevelopmentMode!.Value)
+        {
+            _logger.LogInformation(
+                "Envio SMTP simulado com sucesso para {To}. MailType: {MailType}. MessageId: {MessageId}",
+                mailEvent.To,
+                mailEvent.MailType ?? "legacy.template",
+                messageId);
+
+            return messageId;
+        }
+
         using SmtpClient smtpClient = CreateClient();
         await smtpClient.SendMailAsync(message, cancellationToken);
 
