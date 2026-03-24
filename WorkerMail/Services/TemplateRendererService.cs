@@ -18,33 +18,37 @@ public sealed class TemplateRendererService
         _logger = logger;
     }
 
-    public async Task<RenderedMail> RenderAsync(MailEvent mailEvent, CancellationToken cancellationToken)
+    public async Task<RenderedMail> RenderAsync(
+        MailEvent mailEvent,
+        string templateName,
+        string? subjectOverride,
+        CancellationToken cancellationToken)
     {
-        string templateBasePath = Path.Combine(AppContext.BaseDirectory, _templateOptions.BasePath, mailEvent.Template);
+        string templateBasePath = Path.Combine(AppContext.BaseDirectory, _templateOptions.BasePath, templateName);
         string htmlPath = templateBasePath + ".html";
         string textPath = templateBasePath + ".txt";
         string subjectPath = templateBasePath + ".subject.txt";
 
         if (!File.Exists(htmlPath) && !File.Exists(textPath))
         {
-            throw new InvalidOperationException($"Template '{mailEvent.Template}' não encontrado.");
+            throw new InvalidOperationException($"Template '{templateName}' não encontrado.");
         }
 
-        if (!File.Exists(subjectPath) && string.IsNullOrWhiteSpace(mailEvent.Subject))
+        if (!File.Exists(subjectPath) && string.IsNullOrWhiteSpace(subjectOverride))
         {
-            throw new InvalidOperationException($"Assunto do template '{mailEvent.Template}' não encontrado.");
+            throw new InvalidOperationException($"Assunto do template '{templateName}' não encontrado.");
         }
 
         bool isHtml = File.Exists(htmlPath);
         string bodyTemplate = await File.ReadAllTextAsync(isHtml ? htmlPath : textPath, cancellationToken);
-        string subjectTemplate = !string.IsNullOrWhiteSpace(mailEvent.Subject)
-            ? mailEvent.Subject
+        string subjectTemplate = !string.IsNullOrWhiteSpace(subjectOverride)
+            ? subjectOverride
             : await File.ReadAllTextAsync(subjectPath, cancellationToken);
 
-        string subject = ReplacePlaceholders(subjectTemplate, mailEvent);
+        string subject = NormalizeSubject(ReplacePlaceholders(subjectTemplate, mailEvent));
         string body = ReplacePlaceholders(bodyTemplate, mailEvent);
 
-        _logger.LogDebug("Template {Template} renderizado para {To}", mailEvent.Template, mailEvent.To);
+        _logger.LogDebug("Template {Template} renderizado para {To}", templateName, mailEvent.To);
 
         return new RenderedMail
         {
@@ -84,5 +88,22 @@ public sealed class TemplateRendererService
         }
 
         return rendered;
+    }
+
+    private static string NormalizeSubject(string subject)
+    {
+        string normalized = subject.Trim();
+
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            throw new InvalidOperationException("Assunto renderizado ficou vazio.");
+        }
+
+        if (normalized.Contains('\r') || normalized.Contains('\n'))
+        {
+            throw new InvalidOperationException("Assunto do e-mail contém quebra de linha inválida.");
+        }
+
+        return normalized;
     }
 }

@@ -23,16 +23,10 @@ public sealed class SmtpOptions
     public bool? UseDefaultCredentials { get; set; }
 
     [Required]
-    [EmailAddress]
-    public string FromEmail { get; set; } = null!;
+    public string DefaultSenderProfile { get; set; } = null!;
 
     [Required]
-    public string FromName { get; set; } = null!;
-
-    [EmailAddress]
-    public string? ReplyToEmail { get; set; }
-
-    public string? ReplyToName { get; set; }
+    public Dictionary<string, SmtpSenderProfileOptions> SenderProfiles { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
     [Required]
     [Range(1000, 120000)]

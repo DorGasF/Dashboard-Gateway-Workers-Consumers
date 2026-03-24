@@ -19,6 +19,7 @@ public sealed class MailProcessingService
 
     private readonly ILogger<MailProcessingService> _logger;
     private readonly RedisService _redisService;
+    private readonly MailDefinitionResolverService _mailDefinitionResolverService;
     private readonly TemplateRendererService _templateRendererService;
     private readonly SmtpEmailSender _smtpEmailSender;
     private readonly IProducer<string, string> _producer;
@@ -34,6 +35,7 @@ public sealed class MailProcessingService
     public MailProcessingService(
         ILogger<MailProcessingService> logger,
         RedisService redisService,
+        MailDefinitionResolverService mailDefinitionResolverService,
         TemplateRendererService templateRendererService,
         SmtpEmailSender smtpEmailSender,
         IProducer<string, string> producer,
@@ -42,6 +44,7 @@ public sealed class MailProcessingService
     {
         _logger = logger;
         _redisService = redisService;
+        _mailDefinitionResolverService = mailDefinitionResolverService;
         _templateRendererService = templateRendererService;
         _smtpEmailSender = smtpEmailSender;
         _producer = producer;
@@ -137,8 +140,18 @@ public sealed class MailProcessingService
                 idempotencyKey,
                 TimeSpan.FromHours(_attemptKeyTtlHours));
 
-            RenderedMail renderedMail = await _templateRendererService.RenderAsync(mailEvent, cancellationToken);
-            string messageId = await _smtpEmailSender.SendAsync(mailEvent, renderedMail, cancellationToken);
+            ResolvedMailDefinition resolvedMailDefinition = _mailDefinitionResolverService.Resolve(mailEvent);
+            RenderedMail renderedMail = await _templateRendererService.RenderAsync(
+                mailEvent,
+                resolvedMailDefinition.Template,
+                resolvedMailDefinition.SubjectOverride,
+                cancellationToken);
+
+            string messageId = await _smtpEmailSender.SendAsync(
+                mailEvent,
+                renderedMail,
+                resolvedMailDefinition.SenderProfile,
+                cancellationToken);
 
             await _redisService.MarkAsProcessedAsync(
                 idempotencyKey,
@@ -146,6 +159,9 @@ public sealed class MailProcessingService
                 {
                     mailEvent.EventId,
                     mailEvent.EventType,
+                    MailType = resolvedMailDefinition.MailType,
+                    Template = resolvedMailDefinition.Template,
+                    SenderProfile = resolvedMailDefinition.SenderProfileName,
                     mailEvent.To,
                     MessageId = messageId,
                     ProcessedAt = DateTimeOffset.UtcNow,
@@ -325,13 +341,19 @@ public sealed class MailProcessingService
             return false;
         }
 
-        if (string.IsNullOrWhiteSpace(mailEvent.Template))
+        if (string.IsNullOrWhiteSpace(mailEvent.MailType) && string.IsNullOrWhiteSpace(mailEvent.Template))
         {
-            validationError = "Template é obrigatório.";
+            validationError = "MailType ou Template é obrigatório.";
             return false;
         }
 
-        if (!TemplateNameRegex.IsMatch(mailEvent.Template))
+        if (!string.IsNullOrWhiteSpace(mailEvent.MailType) && !TemplateNameRegex.IsMatch(mailEvent.MailType))
+        {
+            validationError = "MailType possui caracteres inválidos.";
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(mailEvent.Template) && !TemplateNameRegex.IsMatch(mailEvent.Template))
         {
             validationError = "Template possui caracteres inválidos.";
             return false;
@@ -416,7 +438,8 @@ public sealed class MailProcessingService
         {
             metadata["eventId"] = mailEvent.EventId.ToString();
             metadata["eventType"] = mailEvent.EventType;
-            metadata["template"] = mailEvent.Template;
+            metadata["mailType"] = mailEvent.MailType ?? string.Empty;
+            metadata["template"] = mailEvent.Template ?? string.Empty;
             metadata["to"] = mailEvent.To;
         }
 

@@ -5,8 +5,9 @@ public sealed class MailEvent
     public Guid EventId { get; set; }
     public string? IdempotencyKey { get; set; }
     public string EventType { get; set; } = "email.send.requested";
+    public string? MailType { get; set; }
     public DateTimeOffset OccurredAt { get; set; } = DateTimeOffset.UtcNow;
-    public string Template { get; set; } = string.Empty;
+    public string? Template { get; set; }
     public string To { get; set; } = string.Empty;
     public List<string> Cc { get; set; } = [];
     public List<string> Bcc { get; set; } = [];

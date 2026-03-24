@@ -44,6 +44,12 @@ builder.Services
     .ValidateOnStart();
 
 builder.Services
+    .AddOptions<MailTypeOptions>()
+    .Bind(builder.Configuration.GetSection(MailTypeOptions.SectionName))
+    .Validate(ValidateOptions, "Configuração inválida de MailTypes.")
+    .ValidateOnStart();
+
+builder.Services
     .AddOptions<ConsoleLoggingOptions>()
     .Bind(builder.Configuration.GetSection(ConsoleLoggingOptions.SectionName))
     .Validate(ValidateOptions, "Configuração inválida de log de console.")
@@ -114,6 +120,7 @@ builder.Services.AddSingleton<IAdminClient>(serviceProvider =>
 builder.Services.AddSingleton<RedisService>();
 builder.Services.AddSingleton<KafkaTopicProvisionerService>();
 builder.Services.AddSingleton<LogQueue>();
+builder.Services.AddSingleton<MailDefinitionResolverService>();
 builder.Services.AddSingleton<TemplateRendererService>();
 builder.Services.AddSingleton<SmtpEmailSender>();
 builder.Services.AddSingleton<MailProcessingService>();

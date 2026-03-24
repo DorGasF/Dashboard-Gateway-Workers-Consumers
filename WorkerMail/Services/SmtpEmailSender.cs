@@ -18,13 +18,17 @@ public sealed class SmtpEmailSender
         _logger = logger;
     }
 
-    public async Task<string> SendAsync(MailEvent mailEvent, RenderedMail renderedMail, CancellationToken cancellationToken)
+    public async Task<string> SendAsync(
+        MailEvent mailEvent,
+        RenderedMail renderedMail,
+        SmtpSenderProfileOptions senderProfile,
+        CancellationToken cancellationToken)
     {
-        string messageId = BuildMessageId(mailEvent.ResolveIdempotencyKey());
+        string messageId = BuildMessageId(mailEvent.ResolveIdempotencyKey(), senderProfile);
 
         using MailMessage message = new()
         {
-            From = new MailAddress(_smtpOptions.FromEmail, _smtpOptions.FromName, Encoding.UTF8),
+            From = new MailAddress(senderProfile.FromEmail, senderProfile.FromName, Encoding.UTF8),
             Subject = renderedMail.Subject,
             SubjectEncoding = Encoding.UTF8,
             Body = renderedMail.Body,
@@ -36,9 +40,9 @@ public sealed class SmtpEmailSender
         AddAddresses(message.CC, mailEvent.Cc);
         AddAddresses(message.Bcc, mailEvent.Bcc);
 
-        if (!string.IsNullOrWhiteSpace(_smtpOptions.ReplyToEmail))
+        if (!string.IsNullOrWhiteSpace(senderProfile.ReplyToEmail))
         {
-            message.ReplyToList.Add(new MailAddress(_smtpOptions.ReplyToEmail, _smtpOptions.ReplyToName, Encoding.UTF8));
+            message.ReplyToList.Add(new MailAddress(senderProfile.ReplyToEmail, senderProfile.ReplyToName, Encoding.UTF8));
         }
 
         message.Headers.Add("X-Raims-Event-Id", mailEvent.EventId.ToString());
@@ -84,9 +88,9 @@ public sealed class SmtpEmailSender
         }
     }
 
-    private string BuildMessageId(string idempotencyKey)
+    private static string BuildMessageId(string idempotencyKey, SmtpSenderProfileOptions senderProfile)
     {
-        string domain = new MailAddress(_smtpOptions.FromEmail).Host;
+        string domain = new MailAddress(senderProfile.FromEmail).Host;
         return $"<{idempotencyKey}@{domain}>";
     }
 }
