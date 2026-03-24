@@ -10,16 +10,16 @@ namespace WorkerMail.Services;
 public sealed class SmtpEmailSender
 {
     private readonly SmtpOptions _smtpOptions;
+    private readonly SmtpConnectionPoolService _smtpConnectionPoolService;
     private readonly ILogger<SmtpEmailSender> _logger;
-    private readonly bool _developmentMode;
 
     public SmtpEmailSender(
         IOptions<SmtpOptions> smtpOptions,
-        WorkerRuntimeContext runtimeContext,
+        SmtpConnectionPoolService smtpConnectionPoolService,
         ILogger<SmtpEmailSender> logger)
     {
         _smtpOptions = smtpOptions.Value;
-        _developmentMode = runtimeContext.DevelopmentMode;
+        _smtpConnectionPoolService = smtpConnectionPoolService;
         _logger = logger;
     }
 
@@ -54,8 +54,11 @@ public sealed class SmtpEmailSender
         message.Headers.Add("X-Raims-Idempotency-Key", mailEvent.ResolveIdempotencyKey());
         message.Headers.Add("Message-ID", messageId);
 
+        await using SmtpConnectionPoolService.SmtpConnectionLease connectionLease = await _smtpConnectionPoolService.AcquireAsync(cancellationToken);
+
         if (_smtpOptions.DevelopmentMode!.Value)
         {
+            connectionLease.MarkMessageSent();
             _logger.LogInformation(
                 "Envio SMTP simulado com sucesso para {To}. MailType: {MailType}. Sender={From}. MessageId: {MessageId}",
                 mailEvent.To,
@@ -66,38 +69,19 @@ public sealed class SmtpEmailSender
             return messageId;
         }
 
-        if (_developmentMode)
+        try
         {
-            _logger.LogInformation(
-                "[DEV] Iniciando envio SMTP real para {To}. Sender={From}. Subject={Subject}",
-                mailEvent.To,
-                senderProfile.FromEmail,
-                renderedMail.Subject);
+            await connectionLease.Client!.SendMailAsync(message, cancellationToken);
+            connectionLease.MarkMessageSent();
         }
-
-        using SmtpClient smtpClient = CreateClient();
-        await smtpClient.SendMailAsync(message, cancellationToken);
+        catch
+        {
+            connectionLease.MarkBroken();
+            throw;
+        }
 
         _logger.LogInformation("E-mail enviado com sucesso para {To}", mailEvent.To);
         return messageId;
-    }
-
-    private SmtpClient CreateClient()
-    {
-        SmtpClient smtpClient = new(_smtpOptions.Host, _smtpOptions.Port!.Value)
-        {
-            EnableSsl = _smtpOptions.EnableSsl!.Value,
-            UseDefaultCredentials = _smtpOptions.UseDefaultCredentials!.Value,
-            DeliveryMethod = SmtpDeliveryMethod.Network,
-            Timeout = _smtpOptions.TimeoutMs!.Value
-        };
-
-        if (!_smtpOptions.UseDefaultCredentials.Value && !string.IsNullOrWhiteSpace(_smtpOptions.Username))
-        {
-            smtpClient.Credentials = new NetworkCredential(_smtpOptions.Username, _smtpOptions.Password);
-        }
-
-        return smtpClient;
     }
 
     private static IEnumerable<string> SplitAddresses(string addresses)

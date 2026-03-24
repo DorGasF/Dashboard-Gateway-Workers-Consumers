@@ -10,18 +10,15 @@ public sealed class KafkaTopicProvisionerService
     private readonly IAdminClient _adminClient;
     private readonly ILogger<KafkaTopicProvisionerService> _logger;
     private readonly KafkaOptions _kafkaOptions;
-    private readonly bool _developmentMode;
 
     public KafkaTopicProvisionerService(
         IAdminClient adminClient,
-        WorkerRuntimeContext runtimeContext,
         IOptions<KafkaOptions> kafkaOptions,
         ILogger<KafkaTopicProvisionerService> logger)
     {
         _adminClient = adminClient;
         _logger = logger;
         _kafkaOptions = kafkaOptions.Value;
-        _developmentMode = runtimeContext.DevelopmentMode;
     }
 
     public async Task EnsureTopicsAvailableAsync(CancellationToken cancellationToken)
@@ -30,11 +27,6 @@ public sealed class KafkaTopicProvisionerService
         {
             try
             {
-                if (_developmentMode)
-                {
-                    _logger.LogInformation("[DEV] Verificando disponibilidade dos tópicos {RequestTopic} e {DeadLetterTopic}.", _kafkaOptions.RequestTopic, _kafkaOptions.DeadLetterTopic);
-                }
-
                 if (_kafkaOptions.EnsureTopicsOnStartup!.Value)
                 {
                     await TryCreateTopicsAsync(cancellationToken);
@@ -43,11 +35,6 @@ public sealed class KafkaTopicProvisionerService
                 IReadOnlyList<string> missingTopics = GetMissingTopics();
                 if (missingTopics.Count == 0)
                 {
-                    if (_developmentMode)
-                    {
-                        _logger.LogInformation("[DEV] Todos os tópicos necessários do WorkerMail estão disponíveis.");
-                    }
-
                     return;
                 }
 
@@ -120,13 +107,6 @@ public sealed class KafkaTopicProvisionerService
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-
-            if (_developmentMode)
-            {
-                _logger.LogInformation(
-                    "[DEV] Tentando garantir criação dos tópicos: {Topics}",
-                    string.Join(", ", topicSpecifications.Select(topic => topic.Name)));
-            }
 
             await _adminClient.CreateTopicsAsync(topicSpecifications);
             _logger.LogInformation(

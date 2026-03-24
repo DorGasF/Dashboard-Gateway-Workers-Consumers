@@ -102,38 +102,17 @@ builder.Services.AddSingleton<IConnectionMultiplexer>(serviceProvider =>
 builder.Services.AddSingleton<IConsumer<string, string>>(serviceProvider =>
 {
     KafkaOptions kafkaOptions = serviceProvider.GetRequiredService<IOptions<KafkaOptions>>().Value;
-    WorkerRuntimeContext runtimeContext = serviceProvider.GetRequiredService<WorkerRuntimeContext>();
-    ILoggerFactory loggerFactory = serviceProvider.GetRequiredService<ILoggerFactory>();
-    ILogger logger = loggerFactory.CreateLogger("WorkerMail.KafkaConsumer");
-
+    KafkaPartitionTrackerService partitionTrackerService = serviceProvider.GetRequiredService<KafkaPartitionTrackerService>();
     ConsumerBuilder<string, string> consumerBuilder = new(BuildConsumerConfig(kafkaOptions));
 
     consumerBuilder.SetPartitionsAssignedHandler((_, partitions) =>
     {
-        if (runtimeContext.DevelopmentMode)
-        {
-            logger.LogInformation(
-                "[DEV] Partições atribuídas ao consumer: {Partitions}",
-                string.Join(", ", partitions.Select(partition => $"{partition.Topic}[{partition.Partition.Value}]")));
-        }
+        partitionTrackerService.HandleAssigned(partitions);
     });
 
     consumerBuilder.SetPartitionsRevokedHandler((_, partitions) =>
     {
-        if (runtimeContext.DevelopmentMode)
-        {
-            logger.LogInformation(
-                "[DEV] Partições revogadas do consumer: {Partitions}",
-                string.Join(", ", partitions.Select(partition => $"{partition.Topic}[{partition.Partition.Value}]")));
-        }
-    });
-
-    consumerBuilder.SetErrorHandler((_, error) =>
-    {
-        if (runtimeContext.DevelopmentMode)
-        {
-            logger.LogWarning("[DEV] Erro do consumer Kafka: {Code} - {Reason}", error.Code, error.Reason);
-        }
+        partitionTrackerService.HandleRevoked(partitions);
     });
 
     return consumerBuilder.Build();
@@ -153,9 +132,11 @@ builder.Services.AddSingleton<IAdminClient>(serviceProvider =>
 
 builder.Services.AddSingleton<RedisService>();
 builder.Services.AddSingleton<WorkerRuntimeContext>();
+builder.Services.AddSingleton<KafkaPartitionTrackerService>();
 builder.Services.AddSingleton<KafkaTopicProvisionerService>();
 builder.Services.AddSingleton<LogQueue>();
 builder.Services.AddSingleton<MailDefinitionResolverService>();
+builder.Services.AddSingleton<SmtpConnectionPoolService>();
 builder.Services.AddSingleton<TemplateRendererService>();
 builder.Services.AddSingleton<SmtpEmailSender>();
 builder.Services.AddSingleton<MailProcessingService>();

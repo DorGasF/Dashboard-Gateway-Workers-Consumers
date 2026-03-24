@@ -19,6 +19,14 @@ public sealed class WorkerOptions
     public int? RetryDelayMs { get; set; }
 
     [Required]
+    [Range(1, 500)]
+    public int? MaxConcurrentMessages { get; set; }
+
+    [Required]
+    [Range(1, 300)]
+    public int? ShutdownDrainTimeoutSeconds { get; set; }
+
+    [Required]
     [Range(5, 3600)]
     public int? LockTimeoutSeconds { get; set; }
 

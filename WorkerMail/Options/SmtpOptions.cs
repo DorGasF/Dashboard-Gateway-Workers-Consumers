@@ -26,6 +26,14 @@ public sealed class SmtpOptions
     public bool? UseDefaultCredentials { get; set; }
 
     [Required]
+    [Range(1, 500)]
+    public int? MaxConnections { get; set; }
+
+    [Required]
+    [Range(1, 10000)]
+    public int? MaxMessagesPerConnection { get; set; }
+
+    [Required]
     public string DefaultSenderProfile { get; set; } = null!;
 
     [Required]

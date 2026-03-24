@@ -31,7 +31,6 @@ public sealed class MailProcessingService
     private readonly int _maxProcessingAttempts;
     private readonly bool _cacheLastEvent;
     private readonly int _lastEventCacheTtlMinutes;
-    private readonly bool _developmentMode;
 
     public MailProcessingService(
         ILogger<MailProcessingService> logger,
@@ -40,7 +39,6 @@ public sealed class MailProcessingService
         TemplateRendererService templateRendererService,
         SmtpEmailSender smtpEmailSender,
         IProducer<string, string> producer,
-        WorkerRuntimeContext runtimeContext,
         IOptions<KafkaOptions> kafkaOptions,
         IOptions<WorkerOptions> workerOptions)
     {
@@ -57,7 +55,6 @@ public sealed class MailProcessingService
         _maxProcessingAttempts = workerOptions.Value.MaxProcessingAttempts!.Value;
         _cacheLastEvent = workerOptions.Value.CacheLastEvent!.Value;
         _lastEventCacheTtlMinutes = workerOptions.Value.LastEventCacheTtlMinutes!.Value;
-        _developmentMode = runtimeContext.DevelopmentMode;
     }
 
     public async Task<MailProcessingResult> ProcessAsync(ConsumeResult<string, string> consumeResult, CancellationToken cancellationToken)
@@ -68,11 +65,6 @@ public sealed class MailProcessingService
         try
         {
             mailEvent = JsonSerializer.Deserialize<MailEvent>(rawMessage, JsonSerializerOptions);
-
-            if (_developmentMode)
-            {
-                _logger.LogInformation("[DEV] Payload bruto recebido do Kafka: {Payload}", Truncate(rawMessage, 1200));
-            }
         }
         catch (JsonException ex)
         {
@@ -113,18 +105,6 @@ public sealed class MailProcessingService
         }
 
         string idempotencyKey = mailEvent!.ResolveIdempotencyKey();
-
-        if (_developmentMode)
-        {
-            _logger.LogInformation(
-                "[DEV] Evento desserializado. EventId={EventId} MailType={MailType} Template={Template} To={To} IdempotencyKey={IdempotencyKey}",
-                mailEvent.EventId,
-                mailEvent.MailType ?? string.Empty,
-                mailEvent.Template ?? string.Empty,
-                mailEvent.To,
-                idempotencyKey);
-        }
-
         if (await _redisService.IsProcessedAsync(idempotencyKey))
         {
             _logger.LogInformation("Evento {EventId} já foi processado anteriormente. Commitando sem reenviar.", mailEvent.EventId);
@@ -147,11 +127,6 @@ public sealed class MailProcessingService
             return MailProcessingResult.Retry("Outro worker está processando esse mesmo evento.");
         }
 
-        if (_developmentMode)
-        {
-            _logger.LogInformation("[DEV] Lock de processamento adquirido para {IdempotencyKey}.", idempotencyKey);
-        }
-
         int attempt = 0;
 
         try
@@ -165,21 +140,7 @@ public sealed class MailProcessingService
                 idempotencyKey,
                 TimeSpan.FromHours(_attemptKeyTtlHours));
 
-            if (_developmentMode)
-            {
-                _logger.LogInformation("[DEV] Tentativa atual do evento {EventId}: {Attempt}", mailEvent.EventId, attempt);
-            }
-
             ResolvedMailDefinition resolvedMailDefinition = _mailDefinitionResolverService.Resolve(mailEvent);
-
-            if (_developmentMode)
-            {
-                _logger.LogInformation(
-                    "[DEV] Definicao resolvida. MailType={MailType} Template={Template} SenderProfile={SenderProfile}",
-                    resolvedMailDefinition.MailType,
-                    resolvedMailDefinition.Template,
-                    resolvedMailDefinition.SenderProfileName);
-            }
 
             RenderedMail renderedMail = await _templateRendererService.RenderAsync(
                 mailEvent,
@@ -214,11 +175,6 @@ public sealed class MailProcessingService
             if (_cacheLastEvent)
             {
                 await _redisService.CacheLastEventAsync(mailEvent, TimeSpan.FromMinutes(_lastEventCacheTtlMinutes));
-            }
-
-            if (_developmentMode)
-            {
-                _logger.LogInformation("[DEV] Evento {EventId} concluido com sucesso e marcado como processado.", mailEvent.EventId);
             }
 
             _logger.LogInformation(
@@ -489,15 +445,5 @@ public sealed class MailProcessingService
         }
 
         return metadata;
-    }
-
-    private static string Truncate(string value, int maxLength)
-    {
-        if (string.IsNullOrWhiteSpace(value) || value.Length <= maxLength)
-        {
-            return value;
-        }
-
-        return value[..maxLength] + "...";
     }
 }
