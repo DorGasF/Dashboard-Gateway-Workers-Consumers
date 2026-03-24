@@ -11,17 +11,20 @@ public sealed class Worker : BackgroundService
     private readonly IConsumer<string, string> _consumer;
     private readonly KafkaTopicProvisionerService _kafkaTopicProvisionerService;
     private readonly MailProcessingService _mailProcessingService;
+    private readonly bool _developmentMode;
     private readonly string _requestTopic;
     private readonly string _groupId;
     private readonly int _pollIntervalMs;
     private readonly int _idleDelayMs;
     private readonly int _retryDelayMs;
+    private DateTimeOffset _lastIdleDevelopmentLogAt = DateTimeOffset.MinValue;
 
     public Worker(
         ILogger<Worker> logger,
         IConsumer<string, string> consumer,
         KafkaTopicProvisionerService kafkaTopicProvisionerService,
         MailProcessingService mailProcessingService,
+        WorkerRuntimeContext runtimeContext,
         Microsoft.Extensions.Options.IOptions<KafkaOptions> kafkaOptions,
         Microsoft.Extensions.Options.IOptions<WorkerOptions> workerOptions)
     {
@@ -29,6 +32,7 @@ public sealed class Worker : BackgroundService
         _consumer = consumer;
         _kafkaTopicProvisionerService = kafkaTopicProvisionerService;
         _mailProcessingService = mailProcessingService;
+        _developmentMode = runtimeContext.DevelopmentMode;
         _requestTopic = kafkaOptions.Value.RequestTopic;
         _groupId = kafkaOptions.Value.GroupId;
         _pollIntervalMs = workerOptions.Value.PollIntervalMs!.Value;
@@ -45,7 +49,19 @@ public sealed class Worker : BackgroundService
                 _requestTopic,
                 _groupId);
 
+            if (_developmentMode)
+            {
+                _logger.LogInformation("[DEV] DevelopmentMode ativo no WorkerMail.");
+                _logger.LogInformation("[DEV] Iniciando verificação/disponibilidade de tópicos Kafka.");
+            }
+
             await _kafkaTopicProvisionerService.EnsureTopicsAvailableAsync(stoppingToken);
+
+            if (_developmentMode)
+            {
+                _logger.LogInformation("[DEV] Tópicos Kafka disponíveis. Executando subscribe no tópico {Topic}.", _requestTopic);
+            }
+
             _consumer.Subscribe(_requestTopic);
 
             while (!stoppingToken.IsCancellationRequested)
@@ -58,8 +74,19 @@ public sealed class Worker : BackgroundService
 
                     if (consumeResult is null)
                     {
+                        LogDevelopmentIdleState();
                         await Task.Delay(_idleDelayMs, stoppingToken);
                         continue;
+                    }
+
+                    if (_developmentMode)
+                    {
+                        _logger.LogInformation(
+                            "[DEV] Mensagem consumida. Topic={Topic} Partition={Partition} Offset={Offset} Key={Key}",
+                            consumeResult.Topic,
+                            consumeResult.Partition.Value,
+                            consumeResult.Offset.Value,
+                            consumeResult.Message.Key ?? string.Empty);
                     }
 
                     MailProcessingResult processingResult = await _mailProcessingService.ProcessAsync(consumeResult, stoppingToken);
@@ -67,6 +94,15 @@ public sealed class Worker : BackgroundService
                     if (processingResult.Action == MailProcessingAction.Commit)
                     {
                         _consumer.Commit(consumeResult);
+
+                        if (_developmentMode)
+                        {
+                            _logger.LogInformation(
+                                "[DEV] Offset confirmado com sucesso. Partition={Partition} Offset={Offset}",
+                                consumeResult.Partition.Value,
+                                consumeResult.Offset.Value);
+                        }
+
                         continue;
                     }
 
@@ -160,5 +196,23 @@ public sealed class Worker : BackgroundService
             reason);
 
         _consumer.Seek(consumeResult.TopicPartitionOffset);
+    }
+
+    private void LogDevelopmentIdleState()
+    {
+        if (!_developmentMode)
+        {
+            return;
+        }
+
+        if (DateTimeOffset.UtcNow - _lastIdleDevelopmentLogAt < TimeSpan.FromSeconds(5))
+        {
+            return;
+        }
+
+        _lastIdleDevelopmentLogAt = DateTimeOffset.UtcNow;
+        _logger.LogInformation(
+            "[DEV] Nenhuma mensagem consumida ainda. Aguardando atribuicao de particoes ou novas mensagens no topico {Topic}.",
+            _requestTopic);
     }
 }

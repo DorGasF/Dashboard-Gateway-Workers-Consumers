@@ -11,10 +11,15 @@ public sealed class SmtpEmailSender
 {
     private readonly SmtpOptions _smtpOptions;
     private readonly ILogger<SmtpEmailSender> _logger;
+    private readonly bool _developmentMode;
 
-    public SmtpEmailSender(IOptions<SmtpOptions> smtpOptions, ILogger<SmtpEmailSender> logger)
+    public SmtpEmailSender(
+        IOptions<SmtpOptions> smtpOptions,
+        WorkerRuntimeContext runtimeContext,
+        ILogger<SmtpEmailSender> logger)
     {
         _smtpOptions = smtpOptions.Value;
+        _developmentMode = runtimeContext.DevelopmentMode;
         _logger = logger;
     }
 
@@ -52,12 +57,22 @@ public sealed class SmtpEmailSender
         if (_smtpOptions.DevelopmentMode!.Value)
         {
             _logger.LogInformation(
-                "Envio SMTP simulado com sucesso para {To}. MailType: {MailType}. MessageId: {MessageId}",
+                "Envio SMTP simulado com sucesso para {To}. MailType: {MailType}. Sender={From}. MessageId: {MessageId}",
                 mailEvent.To,
                 mailEvent.MailType ?? "legacy.template",
+                senderProfile.FromEmail,
                 messageId);
 
             return messageId;
+        }
+
+        if (_developmentMode)
+        {
+            _logger.LogInformation(
+                "[DEV] Iniciando envio SMTP real para {To}. Sender={From}. Subject={Subject}",
+                mailEvent.To,
+                senderProfile.FromEmail,
+                renderedMail.Subject);
         }
 
         using SmtpClient smtpClient = CreateClient();
